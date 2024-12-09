@@ -1,0 +1,558 @@
+---
+title: "SW_429_Genetic_linkage_mapping"
+author: "Ishita Isha"
+date: "2024-12-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+Aim 0. Reading the original file
+```{r}
+install.packages("readxl")
+library(readxl)
+ori_sw_429 <- read_excel("C:/Users/t84q538/OneDrive - Montana State University/Desktop/SW 429/sw_429_orginal_file.xlsx")
+ori_sw_429
+```
+
+
+Aim 1. Manipulating the original genotyping file to make it readable for R/qtl and R/ASMap package
+Transposing the original file so it is readable to the ASMap and R/qtl package 
+```{r}
+install.packages("dplyr")
+library(dplyr)
+ori_sw_429 <- ori_sw_429 %>% mutate(CHROM = case_when( CHROM %in% c("1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B", "5A", "5B", "6A", "6B", "7A", "7B") ~ CHROM, CHROM %in% c("1", "2", "3", "4", "5", "6", "7") ~ paste0(CHROM, "D"), TRUE ~ CHROM))
+ori_sw_429$chr_pos <- paste(ori_sw_429$CHROM, ori_sw_429$POS, sep = "_")
+ori_sw_429 <- ori_sw_429 %>%select(-F0s)
+View(ori_sw_429)
+View(ori_sw_429%>% select(CHROM, POS, chr_pos))
+geno_sw_429 <- ori_sw_429 %>%relocate(chr_pos, .before = everything()) %>% select(-CHROM, -POS)         
+View(geno_sw_429)
+transposed_sw_429<-t(geno_sw_429)
+colnames(transposed_sw_429) <- transposed_sw_429[1,]
+transposed_sw_429 <- transposed_sw_429[-1, ]
+rows_to_remove <- grep("Parent", rownames(transposed_sw_429))
+transposed_sw_429 <- transposed_sw_429[-rows_to_remove, ]
+new_row <- rep(1, ncol(transposed_sw_429))
+#converting row names to column names
+transposed_sw_429 <- cbind(Genotype = rownames(transposed_sw_429), transposed_sw_429)
+rownames(transposed_sw_429) <- NULL
+colnames(transposed_sw_429)[1] <- "Genotype"
+View(transposed_sw_429)
+View(transposed_sw_429)
+write.csv(transposed_sw_429, "transposed_sw_429.csv", row.names = TRUE)
+```
+
+#Comment : Even after doing all the manipulations, I still needed to go into my csv file using excel and remove the row names column and add Gentoype on teh very first cell of my csv file becuase otherwise R/ASMap and R/qtl won't read my genotyping data correctly.
+
+Aim 2. Importing the genotyping file to R/qtl and R/ASMap package 
+```{r}
+install.packages("ASMap")
+install.packages("qtl")
+install.packages("lattice")
+library(lattice)
+library(ASMap)
+library(qtl)
+memory.limit(size=90000)
+geno_data_ABH <- read.cross(format = "csv",  file = "transposed_sw_429.csv", na.strings = "-",genotypes = c("A", "B"), alleles = c("A", "B"), estimate.map = FALSE, crosstype = "riself")
+```
+If help is needed
+
+```{r}
+help(write.cross)
+```
+
+Aim3.Summary of genotype data imported to R-qtl 3.1.Overall summary
+3.2.Missing gneotypes 3.3.Number of genotyped markers for each
+individual 3.4.Number of genotyped individuals for each marker
+
+```{r}
+summary(geno_data_ABH)
+geno_data_ABH
+plotMissing(geno_data_ABH, col = "black", main = "Missing Data Plot", xlab = "Individuals", ylab = "Percentage Missing") #percentage missing values-dot plot between markers and individuals  
+```
+ 
+```{r}
+par(mfrow=c(1,2),las=1) #gonna have two plots together 
+plot(ntyped(geno_data_ABH), col = "red", main = "Number of assayed markers", xlab = "Individuals", ylab = "Number of Markers on each individual") ##assayed markers - markers on each indivudal
+plot(ntyped(geno_data_ABH,"mar"), col= "blue", ylab="No of assayed individuals", main="Number of genotypes by markers", xlab="Marker data point")
+```
+
+Aim 4. Find parameter cut off to remove individuals with large number of
+missing genotype/marker data
+
+```{r}
+trimmed_missing_data<-subset(geno_data_ABH, ind=(ntyped(geno_data_ABH)>6500)) #remove markers with less than 6500 markers 
+summary(trimmed_missing_data)
+summary(geno_data_ABH)
+#plot(geno_data_ABH)
+```
+Aim 5. Remove markers with lots of missing genotype/line data.
+
+```{r}
+nt.bymar<-ntyped(trimmed_missing_data,"mar") #calculates number of markers for each individual
+todrop<-names(nt.bymar[nt.bymar<80])  # identifies marker present in less than 80 lines
+trimmed_missing_data<-drop.markers(trimmed_missing_data, todrop) # drop marker present in less than 80 lines
+totmar(trimmed_missing_data) #total number of markers remaining 
+plot(ntyped(trimmed_missing_data,"mar"), ylab="No of assayed individuals", xlab="Markers", main ="Number of genotypes by marker") #plot showing the number of genotyped individuals for each marker in the trimmed_missing_data dataset. It helps visualize the distribution of genotyped individuals across markers.
+summary(trimmed_missing_data)
+
+```
+
+Aim 6. Comparing genotypes for all pair of individuals
+```{r}
+cym<-comparegeno(trimmed_missing_data) 
+hist(cym[lower.tri(cym)], breaks=seq(0,1,len=101), xlab="Number of matching genotypes", main="Number of genotypes by marker") #distribution of similarity scores (number of matching genotypes) across all pairs of individual.
+```
+Aim 7. Identify individuals with matching genotypes
+
+```{r}
+wh <- which(cym>0.75, arr=TRUE)
+wh <- wh[wh[,1]<wh[,2],]
+wh
+```
+
+Aim 8. Inspect the genotypes with matching genotypes
+
+```{r}
+g<-pull.geno(trimmed_missing_data)
+table(g[5,], g[9,])
+table(g[68,],g[70,])
+```
+
+Aim 9. Omit one individual from each pair with duplicate genotypes 
+```{r}
+trimmed_no_duplicate_data<- subset(trimmed_missing_data, ind = -wh[])
+summary(trimmed_no_duplicate_data)
+```
+
+Aim 10. IdenTIfy markers with identIcal genotypes
+
+```{r}
+dup<-findDupMarkers(trimmed_no_duplicate_data, exact.only = FALSE)
+markers_to_keep <- sapply(dup, function(x) x[1])  # Keep the first marker from each duplicate group
+all_markers <- colnames(pull.geno(trimmed_no_duplicate_data)) 
+markers_to_drop <- setdiff(all_markers, markers_to_keep)
+cleaned_data <- drop.markers(trimmed_no_duplicate_data, markers_to_drop)
+trimmed_missing_data<-cleaned_data
+trimmed_missing_data
+```
+
+
+Aim 12. Identify markers with distorted segregation pattern 
+
+```{r}
+gt<-geno.table(trimmed_missing_data)
+gt[gt$P.value<0.05/totmar(trimmed_missing_data),]
+```
+
+Aim 13. Drop markers with distorted segregation patterns 
+```{r}
+todrop<-rownames(gt[gt$P.value<1e-5,])
+trimmed_no_duplicate_data<-drop.markers(trimmed_missing_data,todrop)
+totmar(trimmed_no_duplicate_data)
+```
+
+Aim 14. Explore individuals genotype frequency
+
+```{r}
+g<-pull.geno(trimmed_no_duplicate_data)
+gfreq<-apply(g,1,function(a)table(factor(a, levels = 1:3)))
+gfreq<-t(t(gfreq)/colSums(gfreq))
+par(mfrow=c(1,3), las=1)
+for (i in 1:2)  plot(gfreq[i,], ylab="Genotype frequency", main=c("AA","BB")[i], ylim=c(0,1))
+
+```
+
+Aim 14. Pre- construction and map construction
+```{r}
+#to identify the genotypes with a certain number of missing values.
+stat_sg<-statGen(trimmed_no_duplicate_data, bychr = FALSE, stat.type = "miss", id="Genotype") 
+stat_sg
+#omit all the missing data 
+new_dataset <- subset(trimmed_no_duplicate_data, ind = stat_sg$miss < 2600)
+summary(new_dataset)
+```
+Aim 15. check the segregation distortion statistics of the markers.
+Segregation distortion is phenomenon where the observed allelic
+frequencies at a specific locus deviate from expected allelic
+frequencies due to Mendelian genetics.
+
+```{r}
+profileMark(new_dataset, stat.type = c("seg.dist", "prop", "miss"), crit.val ="bonf", layout = c(1, 4), type = "l", cex = 0.5) 
+```
+Aim 16. Generating preliminary linakge groups using kosambi offered by MSTMap present in ASMap R package, and looking into crossing, double crossing and missing data
+```{r}
+library(ggplot2)
+profileGen(new_dataset,  bychr = TRUE, stat.type = c("xo", "dxo","miss"), id = "Genotype", xo.lambda = NULL) 
+
+## construction of linkage map using MSTmap 
+mapD <- mstmap(new_dataset, bychr = FALSE, dist.fun = "kosambi", anchor = TRUE, trace = TRUE, p.value = 1e-08, id="Genotype")
+mapD
+nmar(mapD)
+map_pu<-pullCross(mapD, type="co.located")
+map_pul<-pullCross(map_pu, type="seg.distortion", pars = list(seg.thresh = 0.02))
+
+
+```
+
+
+Aim 17. Identify all the marker names that are unlinked or are in
+linkage group with number of makers less or equal to 9 and store and remove them from our priliminary linakge map
+
+```{r}
+#create a list containing all the unlinked markers 
+lg_map <-pull.map(map_pul)
+names(lg_map)
+lg_lengths <-sapply(lg_map, function(x) max(x)-min(x))
+zero_length_lg<-names(lg_lengths[lg_lengths == 0])
+map_pul_cleaned<-subset(map_pul, chr = !(chrnames(map_pul) %in% zero_length_lg))
+summary(map_pul_cleaned)
+```
+
+```{r}
+n_markers <- nmar(map_pul_cleaned) 
+print(n_markers)
+small_lg <- names(n_markers[n_markers <= 9])
+print(small_lg)
+map_pul_filtered <- subset(map_pul_cleaned, chr = !(chrnames(map_pul_cleaned) %in% small_lg))
+summary(map_pul_filtered) 
+```
+Aim 18. Remove any markers that are present at the same gentic location
+```{r}
+jittered_map <- jittermap(map_pul_filtered, amount = 0.5)
+sum_file<-summaryMap(jittered_map)
+```
+
+
+Aim 19. Change chromosome names to L1 to L22 (makes it easier to work with)
+
+```{r}
+#optional 
+lgNew<-jittered_map
+old_chr_names <- chrnames(lgNew)
+print(old_chr_names)
+new_chr_names <- paste0("L", seq_along(old_chr_names))
+for (i in seq_along(lgNew$geno)) {
+  old_name <- names(lgNew$geno)[i]
+  new_name <- new_chr_names[i]
+  names(lgNew$geno)[names(lgNew$geno) == old_name] <- new_name}
+print(chrnames(lgNew))
+```
+Aim 20. Visualize the genetic maps formed using LinkageMapView package
+
+```{r}
+#install.packages("devtools") 
+#library(devtools)
+devtools::install_github("bio-services/LinkageMapView", build_vignettes=TRUE)
+library(LinkageMapView)
+visual_linakge_map<-lmv.linkage.plot(lgNew, "SW_429_jittereD.pdf", mapthese = NULL, at.axis = NULL,
+autoconnadj = TRUE, cex.axis = par("cex.axis"),
+cex.lgtitle = par("cex.main"), cex.main = par("cex.main"),
+col.axis = par("col.axis"), col.lgtitle = par("col.main"),
+col.main = par("col.main"), conndf = NULL, denmap = FALSE,
+dupnbr = FALSE, font.axis = par("font.axis"),
+font.lgtitle = par("font.main"), font.main = par("font.main"),
+header = TRUE, labdist = 0.3, labels.axis = TRUE, lcex = par("cex"),
+lcol = par("col"), lfont = par("font"), lgperrow = NULL,
+lgtitles = NULL, lgw = 0.25, lg.col = NULL, lg.lwd = par("lwd"),
+lty.axis = "solid", lwd.axis = 1, lwd.ticks.axis = lwd.axis,
+main = NULL, markerformatlist = NULL, maxnbrcolsfordups = 3,
+pdf.bg = "transparent", pdf.family = "Helvetica", pdf.fg = "black",
+pdf.width = NULL, pdf.height = NULL, pdf.pointsize = 12,
+pdf.title = "LinkageMapView R output", posonleft = NULL,
+prtlgtitles = TRUE, qtldf = NULL, revthese = NULL, rcex = par("cex"),
+rcol = par("col"), rfont = par("font"), roundpos = 1, rsegcol = TRUE,
+ruler = FALSE, sectcoldf = NULL, segcol = NULL, qtlscanone = NULL,
+showonly = NULL, units = "cM", ylab = units)
+summary(lgNew)
+write.cross(lgNew, format="csv", filestem = "SW_429_jittered_MSTMAP", digits=NULL) 
+```
+
+Aim 21. Store heatmap in a pdf file for better visualization !
+```{r}
+#saving to a PDF file
+pdf("heatmap_output_sw_429.pdf", width = 10, height = 8)
+heatMap(lgNew, lmax = 10)
+dev.off()
+sum_file_sw_429<-summaryMap(lgNew)
+write.csv(sum_file_sw_429, file = "sum_file_sw_429.csv")
+```
+
+Aim 22. Storing the genetic map information
+```{r}
+marker_info <- pull.map(lgNew)
+marker_list <- list()
+for (chr in names(marker_info)) {
+  markers <- marker_info[[chr]]
+  chr_df <- data.frame(
+    marker = names(markers),
+    position = markers,
+    chromosome = chr
+  )
+  marker_list[[chr]] <- chr_df
+}
+marker_df <- do.call(rbind, marker_list)
+print(marker_df)
+write.csv(marker_df, file = "marker_positions.csv", row.names = FALSE)
+```
+
+Aim 23.Going through each linkage group  and finding the best order of markers
+
+##########
+
+LG 1 #not running this code, just uisng this as referrence to further use parallel programming
+
+#########
+
+```{r}
+backup_map<-lgNew
+lgNew<-backup_map
+lgNew<-orderMarkers(lgNew,chr='1A',map.function = "kosambi") #reorder markers 
+plotRF(lgNew,chr='1A',alternate.chrid=T,main=NULL,mark.diagonal=T)
+plotMap(lgNew,chr='1A',horizontal=T,show.marker.names=T)
+pull.map(lgNew,as.table=T,chr='1A')
+
+rip4 <- ripple(lgNew, chr="1A", window=5)
+summary(rip4)
+
+rip4lik <- ripple(lgNew, chr="1A", window=1, method="count", error.prob=0.005)
+summary(rip4lik)
+rip4lik_df <- as.data.frame(rip4lik)
+str(rip4lik_df)
+max_lod_score <- max(rip4lik_df$LOD, na.rm = TRUE)  
+best_order_index <- which.max(rip4lik_df$LOD) #index 2
+best_order <- rip4lik_df[best_order_index, ] #for below order
+
+plotRF(lgNew,main=NULL,mark.diagonal=T,chr="1A")
+plotMap(lgNew,chr='1A',horizontal=T,show.marker.names=T)
+pull.map(lgNew,as.table=T,chr="1A")
+```
+
+
+################################################################
+
+Parallel Programming to do the same for all Linkage groups
+
+###############################################################
+
+
+```{r}
+install.packages("parallel")
+library(parallel)
+process_linkage_group <- function(chr, lgNew) {
+  #reordering all the marker order within each linakge group
+  lgNew <- orderMarkers(lgNew, chr=chr, map.function="kosambi")
+  #ripple function helps to find the optimal order of markers
+  rip4lik <- ripple(lgNew, chr=chr, window=1, method="count", error.prob=0.005)
+  rip4lik_df <- as.data.frame(rip4lik)
+  max_lod_score <- max(rip4lik_df$LOD, na.rm = TRUE)
+  best_order_index <- which.max(rip4lik_df$LOD)
+  best_order <- rip4lik_df[best_order_index, ]
+  #saving the recombination fraction graph and the map plot 
+  png(paste0("RF_plot_", chr, ".png"))
+  plotRF(lgNew, main=NULL, mark.diagonal=TRUE, chr=chr)
+  dev.off()
+  png(paste0("Map_plot_", chr, ".png"))
+  plotMap(lgNew, chr=chr, horizontal=TRUE, show.marker.names=TRUE)
+  dev.off()
+  # Pull the map data for the current chromosome
+  map_data <- pull.map(lgNew, as.table=TRUE, chr=chr)
+  # Return the best order, max LOD score, and map data
+  return(list(best_order=best_order, max_lod_score=max_lod_score, map_data=map_data))
+}
+linkage_groups <- paste0("L", 1:22)
+#parallel processing
+n_cores <- detectCores() - 1
+cl <- makeCluster(n_cores)
+clusterExport(cl, varlist = c("process_linkage_group", "lgNew", "ripple", "orderMarkers", "plotRF", "plotMap", "pull.map"))
+
+#running parallel programming using the process_linkage_group function
+results <- parLapply(cl, linkage_groups, function(chr) {
+  process_linkage_group(chr, lgNew)  # Process the current linkage group
+})
+stopCluster(cl)
+
+```
+
+
+
+Aim 24. Visualize the geentic maps formed using LinkageMapView - L1 to L22 linkage groups 
+
+```{r}
+#install.packages("devtools")
+#library(devtools)
+devtools::install_github("bio-services/LinkageMapView", build_vignettes=TRUE)
+library(LinkageMapView)
+visual_linakge_map<-lmv.linkage.plot(lgNew, "SW_429_linkagemap_L1_L22.pdf", mapthese = NULL, at.axis = NULL,
+autoconnadj = TRUE, cex.axis = par("cex.axis"),
+cex.lgtitle = par("cex.main"), cex.main = par("cex.main"),
+col.axis = par("col.axis"), col.lgtitle = par("col.main"),
+col.main = par("col.main"), conndf = NULL, denmap = FALSE,
+dupnbr = FALSE, font.axis = par("font.axis"),
+font.lgtitle = par("font.main"), font.main = par("font.main"),
+header = TRUE, labdist = 0.3, labels.axis = TRUE, lcex = par("cex"),
+lcol = par("col"), lfont = par("font"), lgperrow = NULL,
+lgtitles = NULL, lgw = 0.25, lg.col = NULL, lg.lwd = par("lwd"),
+lty.axis = "solid", lwd.axis = 1, lwd.ticks.axis = lwd.axis,
+main = NULL, markerformatlist = NULL, maxnbrcolsfordups = 3,
+pdf.bg = "transparent", pdf.family = "Helvetica", pdf.fg = "black",
+pdf.width = NULL, pdf.height = NULL, pdf.pointsize = 12,
+pdf.title = "LinkageMapView R output", posonleft = NULL,
+prtlgtitles = TRUE, qtldf = NULL, revthese = NULL, rcex = par("cex"),
+rcol = par("col"), rfont = par("font"), roundpos = 1, rsegcol = TRUE,
+ruler = FALSE, sectcoldf = NULL, segcol = NULL, qtlscanone = NULL,
+showonly = NULL, units = "cM", ylab = units)
+```
+
+#########################################################################
+
+Aim 25. Changing the linkage map names based on which marker exists on them 
+
+#########################################################################
+
+
+
+```{r}
+names(lgNew$geno)[names(lgNew$geno) == "L1"] <- "A1.1" 
+names(lgNew$geno)[names(lgNew$geno) == "L2"] <- "3A.1"
+names(lgNew$geno)[names(lgNew$geno) == "L3"] <- "A1.2"
+names(lgNew$geno)[names(lgNew$geno) == "L4"] <- "7A.1"
+names(lgNew$geno)[names(lgNew$geno) == "L5"] <- "4B"
+names(lgNew$geno)[names(lgNew$geno) == "L6"] <- "6A.1"
+names(lgNew$geno)[names(lgNew$geno) == "L7"] <- "1B"
+names(lgNew$geno)[names(lgNew$geno) == "L8"] <- "5A.1"
+names(lgNew$geno)[names(lgNew$geno) == "L9"] <- "5A.2"
+names(lgNew$geno)[names(lgNew$geno) == "L10"] <- "6A.2"
+names(lgNew$geno)[names(lgNew$geno) == "L11"] <- "6D"
+names(lgNew$geno)[names(lgNew$geno) == "L12"] <- "6B.1"
+names(lgNew$geno)[names(lgNew$geno) == "L13"] <- "Un"
+names(lgNew$geno)[names(lgNew$geno) == "L14"] <- "5B"
+names(lgNew$geno)[names(lgNew$geno) == "L15"] <- "1D"
+names(lgNew$geno)[names(lgNew$geno) == "L16"] <- "3A.2"
+names(lgNew$geno)[names(lgNew$geno) == "L17"] <- "4A"
+names(lgNew$geno)[names(lgNew$geno) == "L18"] <- "2B"
+names(lgNew$geno)[names(lgNew$geno) == "L19"] <- "2A"
+names(lgNew$geno)[names(lgNew$geno) == "L20"] <- "3B"
+names(lgNew$geno)[names(lgNew$geno) == "L21"] <- "6B.2"
+names(lgNew$geno)[names(lgNew$geno) == "L22"] <- "7A.2"
+
+lgNew
+```
+
+Aim 26. Visualize the genetic maps formed using LinkageMapView R package
+
+```{r}
+#install.packages("devtools")
+#library(devtools)
+devtools::install_github("bio-services/LinkageMapView", build_vignettes=TRUE)
+library(LinkageMapView)
+visual_linakge_map<-lmv.linkage.plot(lgNew, "SW_429_linkagemap_all_linkage_groups.pdf", mapthese = NULL, at.axis = NULL,
+autoconnadj = TRUE, cex.axis = par("cex.axis"),
+cex.lgtitle = par("cex.main"), cex.main = par("cex.main"),
+col.axis = par("col.axis"), col.lgtitle = par("col.main"),
+col.main = par("col.main"), conndf = NULL, denmap = FALSE,
+dupnbr = FALSE, font.axis = par("font.axis"),
+font.lgtitle = par("font.main"), font.main = par("font.main"),
+header = TRUE, labdist = 0.3, labels.axis = TRUE, lcex = par("cex"),
+lcol = par("col"), lfont = par("font"), lgperrow = NULL,
+lgtitles = NULL, lgw = 0.25, lg.col = NULL, lg.lwd = par("lwd"),
+lty.axis = "solid", lwd.axis = 1, lwd.ticks.axis = lwd.axis,
+main = NULL, markerformatlist = NULL, maxnbrcolsfordups = 3,
+pdf.bg = "transparent", pdf.family = "Helvetica", pdf.fg = "black",
+pdf.width = NULL, pdf.height = NULL, pdf.pointsize = 12,
+pdf.title = "LinkageMapView R output", posonleft = NULL,
+prtlgtitles = TRUE, qtldf = NULL, revthese = NULL, rcex = par("cex"),
+rcol = par("col"), rfont = par("font"), roundpos = 1, rsegcol = TRUE,
+ruler = FALSE, sectcoldf = NULL, segcol = NULL, qtlscanone = NULL,
+showonly = NULL, units = "cM", ylab = units)
+```
+Aim 27. Saving the gentoyping data in a .csv file that can later on be used as genotyping file for QTL Analysis or other Genetic analysis 
+```{r}
+write.cross(lgNew, format="csv", filestem = "sw_429_final_genetic_map.csv", digits=NULL) 
+```
+
+
+Aim 28. Development of high density genetic linkage map
+```{r}
+marker_info <- pull.map(lgNew)  #extracting the marker information
+marker_list <- list() 
+for (chr in names(marker_info)){
+  markers <- marker_info[[chr]]
+  chr_df <- data.frame(
+    Locus = names(markers),Position = markers,Group = chr)
+  marker_list[[chr]] <- chr_df}
+marker_df <- do.call(rbind, marker_list)
+marker_df <- marker_df[, c("Group", "Position", "Locus")]
+print(marker_df)
+write.csv(marker_df, file = "marker_position_final_linkage_map.csv", row.names = FALSE)
+getwd()
+```
+Aim 29. Storing the summary file and generating a high density linkage map
+
+```{r}
+sum_finalmap_sw_429<-summaryMap(lgNew)
+write.csv(sum_finalmap_sw_429,"sum_finalmap_sw_429.csv")
+#density mapping code
+install.packages("LinkageMapView")
+library(LinkageMapView)
+#input csv file containg map infromation
+df<-read.csv(file = "/Users/t84q538/OneDrive - Montana State University/Masters Project/QTL Analysis/QTL_ANALYSIS_CIMMYT_ISHITA/MB_519_Final porject/marker_position_final_linkage_map.csv")
+df
+#density mapping 
+sectcoldf <- lmvdencolor(df,colorin =
+colorRampPalette(RColorBrewer::brewer.pal(8, "Spectral"))(25))  #color palette can be changed 
+res <- 300
+width_inch <- 10  
+height_inch <- 8
+width_px <- width_inch * res
+height_px <- height_inch * res
+png("High_density_map_Sw429", width = width_px, height = height_px, res = res)
+lmv.linkage.plot(
+  df,"High_density_map_Sw429.pdf",
+  denmap = TRUE,
+  sectcoldf = sectcoldf,
+  pdf.fg = "black",
+  pdf.width = 20,
+  pdf.height = NULL,
+  pdf.pointsize = 12,
+  pdf.title = "High density linkage map of SW-429 x Hi-Line RIL",
+  posonleft = NULL,
+  prtlgtitles = TRUE,
+  qtldf = NULL,
+  revthese = NULL,
+  rcex = par("cex"),
+  rcol = par("col"),
+  rfont = par("font"),
+  roundpos = 1,
+  rsegcol = TRUE,
+  ruler = FALSE,
+  segcol = NULL,
+  qtlscanone = NULL,
+  showonly = NULL)
+
+```
+
